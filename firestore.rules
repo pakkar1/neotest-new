@@ -1,0 +1,206 @@
+rules_version = '2';
+
+/**
+ * NeoTest — Firestore Security Rules (deny by default).
+ *
+ * Arsitektur NeoTest: seluruh operasi tulis dan seluruh pembacaan data
+ * operasional dilakukan oleh API server (Vercel Functions + Admin SDK).
+ * Admin SDK melewati rules ini. Rules ini mengatur akses langsung dari
+ * SDK klien (browser) dan harus tetap ketat meskipun saat ini frontend
+ * tidak membaca Firestore secara langsung.
+ *
+ * Dokumen `userProfiles/{authUid}` dibuat dan dipelihara oleh server dan
+ * memuat role, schoolId, dan studentId yang diverifikasi server. Jangan
+ * pernah membuat/mengubahnya dari klien.
+ */
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function hasProfile() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/userProfiles/$(request.auth.uid));
+    }
+
+    function profile() {
+      return get(/databases/$(database)/documents/userProfiles/$(request.auth.uid)).data;
+    }
+
+    function hasRole(role) {
+      return hasProfile() && role in profile().roles;
+    }
+
+    function isStaff() {
+      return hasRole('admin') || hasRole('superadmin') || hasRole('teacher') || hasRole('proctor');
+    }
+
+    function sameSchool(schoolId) {
+      return hasProfile() && profile().schoolId == schoolId;
+    }
+
+    function myStudentId() {
+      return hasProfile() ? profile().studentId : null;
+    }
+
+    // Profil ringkas milik pengguna sendiri. Dibuat server, klien hanya baca.
+    match /userProfiles/{uid} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow write: if false;
+    }
+
+    // Koleksi yang tidak boleh diakses klien sama sekali.
+    match /users/{id} { allow read, write: if false; }
+    match /answerKeys/{id} { allow read, write: if false; }
+    match /examTokens/{id} { allow read, write: if false; }
+    match /loginAttempts/{id} { allow read, write: if false; }
+    match /idempotency/{id} { allow read, write: if false; }
+    match /demoMeta/{id} { allow read, write: if false; }
+
+    // Data akademik umum: staf sekolah boleh membaca, menulis ditolak.
+    match /schools/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(id));
+      allow write: if false;
+    }
+
+    match /academicYears/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /classes/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /subjects/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /rooms/{id} {
+      allow read: if signedIn() && isStaff();
+      allow write: if false;
+    }
+
+    match /students/{id} {
+      allow read: if signedIn() && (isStaff() || id == myStudentId());
+      allow write: if false;
+    }
+
+    match /teachers/{id} { allow read: if signedIn() && isStaff(); allow write: if false; }
+    match /proctors/{id} { allow read: if signedIn() && isStaff(); allow write: if false; }
+
+    // Bank soal: hanya guru/admin sekolah yang sama. Kunci jawaban terpisah.
+    match /questions/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'))
+        && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /questionBanks/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'))
+        && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /stimuli/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'))
+        && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /examForms/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'))
+        && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /examFormVersions/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'));
+      allow write: if false;
+    }
+
+    match /versionQuestions/{id} {
+      allow read: if signedIn()
+        && (hasRole('teacher') || hasRole('admin') || hasRole('superadmin'));
+      allow write: if false;
+    }
+
+    match /examTypes/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /examSchedules/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /examSessions/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || sameSchool(resource.data.schoolId));
+      allow write: if false;
+    }
+
+    match /examParticipants/{id} {
+      allow read: if signedIn() && (
+        hasRole('superadmin') || sameSchool(resource.data.schoolId) ||
+        (hasProfile() && resource.data.studentId == myStudentId())
+      );
+      allow write: if false;
+    }
+
+    match /examAttempts/{id} {
+      allow read: if signedIn() && (
+        hasRole('superadmin') || hasRole('admin') || hasRole('proctor') ||
+        (hasProfile() && resource.data.studentId == myStudentId())
+      );
+      allow write: if false;
+    }
+
+    match /responses/{id} {
+      allow read: if signedIn() && (
+        hasRole('superadmin') || hasRole('admin') ||
+        (hasProfile() && resource.data.studentId == myStudentId())
+      );
+      allow write: if false;
+    }
+
+    match /examResults/{id} {
+      allow read: if signedIn() && (
+        hasRole('superadmin') || hasRole('admin') || hasRole('teacher') ||
+        (hasProfile() && resource.data.studentId == myStudentId()
+          && resource.data.status == 'published')
+      );
+      allow write: if false;
+    }
+
+    match /itemStats/{id} {
+      allow read: if signedIn() && (hasRole('admin') || hasRole('superadmin') || hasRole('teacher'));
+      allow write: if false;
+    }
+
+    match /incidents/{id} { allow read: if signedIn() && isStaff(); allow write: if false; }
+    match /auditLogs/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || hasRole('admin'));
+      allow write: if false;
+    }
+    match /quotaCounters/{id} {
+      allow read: if signedIn() && (hasRole('superadmin') || hasRole('admin'));
+      allow write: if false;
+    }
+    match /appSettings/{id} { allow read: if signedIn() && isStaff(); allow write: if false; }
+
+    // Default deny.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
