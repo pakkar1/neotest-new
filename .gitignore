@@ -1,0 +1,15 @@
+node_modules
+dist
+dist-ssr
+.env
+.env.local
+.env.*.local
+.vercel
+.data
+*.local
+coverage
+.DS_Store
+.firebase
+firebase-debug.log
+service-account*.json
+*.tsbuildinfo
